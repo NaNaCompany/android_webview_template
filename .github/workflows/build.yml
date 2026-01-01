@@ -19,78 +19,79 @@ jobs:
         distribution: 'temurin'
         cache: gradle
 
-    - name: Install Tools
+    - name: Install Dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y imagemagick
-        # yq is usually pre-installed on GitHub Actions runners (ubuntu-latest)
+        # Update file permissions
+        chmod +x -R android-webview-template
 
     - name: Parse Config
       id: config
       run: |
-        # Simple parsing of yaml using grep and cut
-        APP_NAME=$(grep "app_name:" config.yml | cut -d '"' -f 2)
-        WEBVIEW_URL=$(grep "webview_url:" config.yml | cut -d '"' -f 2)
+        # Fallback to defaults if grep fails
+        APP_NAME="WebView App"
+        url_line=$(grep "webview_url:" config.yml || echo "")
+        name_line=$(grep "app_name:" config.yml || echo "")
+        
+        if [ ! -z "$name_line" ]; then
+          APP_NAME=$(echo $name_line | cut -d '"' -f 2)
+        fi
+        
+        WEBVIEW_URL="https://example.com"
+        if [ ! -z "$url_line" ]; then
+          WEBVIEW_URL=$(echo $url_line | cut -d '"' -f 2)
+        fi
         
         echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
         echo "WEBVIEW_URL=$WEBVIEW_URL" >> $GITHUB_ENV
         
-        echo "Parsed Configuration:"
-        echo "App Name: $APP_NAME"
-        echo "URL: $WEBVIEW_URL"
+        echo "::notice::App Name: $APP_NAME"
+        echo "::notice::URL: $WEBVIEW_URL"
 
-    - name: Apply Configuration (Strings)
+    - name: Update App Config
       run: |
-        cd android-webview-template/app/src/main/res/values
+        STRINGS_XML="android-webview-template/app/src/main/res/values/strings.xml"
         
-        # Escape special characters for sed if necessary (basic implementation)
-        # Using | as delimiter
-        sed -i "s|<string name=\"app_name\">.*</string>|<string name=\"app_name\">$APP_NAME</string>|g" strings.xml
-        sed -i "s|<string name=\"webview_url\">.*</string>|<string name=\"webview_url\">$WEBVIEW_URL</string>|g" strings.xml
+        # Verify file exists
+        ls -l $STRINGS_XML
         
-        cat strings.xml
+        # Use simple sed with | delimiter
+        sed -i "s|<string name=\"app_name\">.*</string>|<string name=\"app_name\">$APP_NAME</string>|g" $STRINGS_XML
+        sed -i "s|<string name=\"webview_url\">.*</string>|<string name=\"webview_url\">$WEBVIEW_URL</string>|g" $STRINGS_XML
+        
+        echo "Updated strings.xml content:"
+        cat $STRINGS_XML
 
     - name: Generate Icons
       run: |
-        # Helper function to resize and copy
-        # We assume icon.png is in the root
-        
         ICON_SRC="icon.png"
         RES_PATH="android-webview-template/app/src/main/res"
         
         if [ ! -f "$ICON_SRC" ]; then
-            echo "Error: icon.png not found in root!"
+            echo "::error::icon.png not found in root directory!"
             exit 1
         fi
 
-        echo "Generating icons from $ICON_SRC..."
+        echo "Generating icons..."
         
-        # MDPI (48x48)
-        mkdir -p $RES_PATH/mipmap-mdpi
-        convert $ICON_SRC -resize 48x48 $RES_PATH/mipmap-mdpi/ic_launcher.png
-        convert $ICON_SRC -resize 48x48 $RES_PATH/mipmap-mdpi/ic_launcher_round.png
-
-        # HDPI (72x72)
-        mkdir -p $RES_PATH/mipmap-hdpi
-        convert $ICON_SRC -resize 72x72 $RES_PATH/mipmap-hdpi/ic_launcher.png
-        convert $ICON_SRC -resize 72x72 $RES_PATH/mipmap-hdpi/ic_launcher_round.png
-
-        # XHDPI (96x96)
-        mkdir -p $RES_PATH/mipmap-xhdpi
-        convert $ICON_SRC -resize 96x96 $RES_PATH/mipmap-xhdpi/ic_launcher.png
-        convert $ICON_SRC -resize 96x96 $RES_PATH/mipmap-xhdpi/ic_launcher_round.png
-
-        # XXHDPI (144x144)
-        mkdir -p $RES_PATH/mipmap-xxhdpi
-        convert $ICON_SRC -resize 144x144 $RES_PATH/mipmap-xxhdpi/ic_launcher.png
-        convert $ICON_SRC -resize 144x144 $RES_PATH/mipmap-xxhdpi/ic_launcher_round.png
-
-        # XXXHDPI (192x192)
-        mkdir -p $RES_PATH/mipmap-xxxhdpi
-        convert $ICON_SRC -resize 192x192 $RES_PATH/mipmap-xxxhdpi/ic_launcher.png
-        convert $ICON_SRC -resize 192x192 $RES_PATH/mipmap-xxxhdpi/ic_launcher_round.png
-
-        echo "Icon generation complete."
+        for dim in 48 72 96 144 192; do
+            case $dim in
+                48) dir="mdpi" ;;
+                72) dir="hdpi" ;;
+                96) dir="xhdpi" ;;
+                144) dir="xxhdpi" ;;
+                192) dir="xxxhdpi" ;;
+            esac
+            
+            target_dir="$RES_PATH/mipmap-$dir"
+            mkdir -p $target_dir
+            
+            convert "$ICON_SRC" -resize ${dim}x${dim} "$target_dir/ic_launcher.png"
+            convert "$ICON_SRC" -resize ${dim}x${dim} "$target_dir/ic_launcher_round.png"
+        done
+        
+        echo "Icons generated."
 
     - name: Setup Gradle
       uses: gradle/gradle-build-action@v2
@@ -100,9 +101,10 @@ jobs:
     - name: Build with Gradle
       run: |
         cd android-webview-template
-        chmod +x gradlew || true
-        # Using gradle from environment if wrapper fails or isn't perfect
-        gradle assembleDebug
+        
+        # Create a dummy properties file if needed, or just run
+        # Run assembleDebug directly
+        gradle assembleDebug --stacktrace
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
